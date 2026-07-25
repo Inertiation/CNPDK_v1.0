@@ -1,0 +1,14 @@
+* ========================================================
+* CNPDK KLayout LVS Reference Netlist
+* Automatically converted from Virtuoso CDL
+* Top Cell: LVS_test_all
+* Source: netlist
+* ========================================================
+
+.SUBCKT LVS_test_all IN OUT VDD VSS
+*.PININFO IN:B OUT:B VDD:B VSS:B
+MI0 net5 IN VSS VSS CNPDK_NMOS W=4u L=2u
+MI1 net5 IN VDD VDD CNPDK_PMOS W=4u L=2u
+RI2 net5 OUT 1244 CNPDK_RPPOLY W=1u L=4u
+CI3 OUT VSS 208e-15 CNPDK_MIMCAP
+.ENDS LVS_test_all

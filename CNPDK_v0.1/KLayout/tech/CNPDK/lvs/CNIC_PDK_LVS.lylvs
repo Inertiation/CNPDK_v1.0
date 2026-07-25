@@ -1,0 +1,333 @@
+<?xml version="1.0" encoding="utf-8"?>
+<klayout-macro>
+ <description/>
+ <version/>
+ <category>lvs</category>
+ <prolog/>
+ <epilog/>
+ <doc/>
+ <autorun>false</autorun>
+ <autorun-early>false</autorun-early>
+ <priority>0</priority>
+ <shortcut/>
+ <show-in-menu>true</show-in-menu>
+ <group-name>lvs_scripts</group-name>
+ <menu-path>tools_menu.lvs.end</menu-path>
+ <interpreter>dsl</interpreter>
+ <dsl-interpreter-name>lvs-dsl-xml</dsl-interpreter-name>
+ <text># ============================================================
+# CNPDK Complete LVS Rule Deck
+#
+# Supported devices:
+#   - CNPDK_NMOS
+#   - CNPDK_PMOS
+#   - CNPDK_RPPOLY (Rsheet = 311 ohm/square)
+#   - CNPDK_MIMCAP (Ca = 2.0e-15 F/um^2)
+#
+# Reference netlist selection:
+#   1. Prefer &lt;current_layout_cell&gt;_reference.cir
+#   2. Otherwise use the most recently modified *_reference.cir
+#   3. Automatically map different layout/reference top names
+# ============================================================
+
+deep
+
+# ============================================================
+# 0. Current-page and reference-netlist auto configuration
+# ============================================================
+
+layout_cell_name = source.cell_name
+layout_file_path = source.path
+
+if layout_file_path.nil? || layout_file_path.empty?
+  raise("The current layout has not been saved. Save the GDS/OASIS file before running LVS.")
+end
+
+layout_directory = File.dirname(layout_file_path)
+
+# First choice: a reference file carrying the current layout cell name.
+preferred_reference = File.join(
+  layout_directory,
+  layout_cell_name + "_reference.cir"
+)
+
+if File.exist?(preferred_reference)
+  reference_netlist = preferred_reference
+else
+  # Fallback: use the newest converted reference file in this GDS directory.
+  reference_candidates = Dir.glob(
+    File.join(layout_directory, "*_reference.cir")
+  )
+
+  if reference_candidates.empty?
+    raise(
+      "No LVS reference netlist was found in the layout directory.\n" +
+      "Expected " + preferred_reference + " or another *_reference.cir file."
+    )
+  end
+
+  reference_netlist = reference_candidates.max_by { |path| File.mtime(path) }
+end
+
+# Read the reference top name from the converter header. If that header is
+# absent, fall back to the last .SUBCKT in the file.
+reference_text = File.read(reference_netlist)
+reference_top_match = reference_text.match(
+  /^\s*\*\s*Top\s+Cell\s*:\s*(\S+)/i
+)
+
+if reference_top_match
+  reference_top_name = reference_top_match[1]
+else
+  reference_subckts = reference_text.scan(
+    /^\s*\.SUBCKT\s+(\S+)/i
+  ).flatten
+
+  if reference_subckts.empty?
+    raise("No .SUBCKT was found in " + reference_netlist)
+  end
+
+  reference_top_name = reference_subckts[-1]
+end
+
+extracted_netlist = File.join(
+  layout_directory,
+  layout_cell_name + "_extracted.cir"
+)
+
+lvs_report_file = File.join(
+  layout_directory,
+  layout_cell_name + "_LVS.lvsdb"
+)
+
+puts("CNPDK LVS layout cell: " + layout_cell_name)
+puts("CNPDK LVS reference: " + reference_netlist)
+puts("CNPDK LVS reference top: " + reference_top_name)
+
+report_lvs(lvs_report_file)
+
+
+# ============================================================
+# 1. GDS layer definitions
+# ============================================================
+
+nwell          = input(21, 0)
+active         = input(22, 0)
+poly           = input(30, 0)
+pplus          = input(31, 0)
+nplus          = input(32, 0)
+contact        = input(33, 0)
+
+metal1         = input(34, 0)
+via1           = input(35, 0)
+metal2         = input(36, 0)
+via2           = input(38, 0)
+metal3         = input(42, 0)
+
+sab            = input(49, 0)
+fuse_top       = input(75, 0)
+resistor_mark  = input(110, 5)
+capacitor_mark = input(117, 5)
+
+metal1_label   = labels(34, 10)
+metal2_label   = labels(36, 10)
+metal3_label   = labels(42, 1)
+
+# Logical layer used to provide the common P-substrate terminal.
+bulk = polygon_layer
+
+
+# ============================================================
+# 2. Poly resistor separation
+# ============================================================
+
+# Poly inside RES_MK is the resistive body.
+resistor_body = poly &amp; resistor_mark
+
+# Poly outside the resistor body remains an ordinary conductor.
+# MOS gates and resistor terminal leads must use this layer.
+poly_wire = poly - resistor_mark
+
+# SAB is a process/recognition support layer. The present LVS deck
+# identifies the resistor through RES_MK; DRC guarantees that the
+# resistor body is correctly covered by SAB.
+
+
+# ============================================================
+# 3. MIM capacitor derived regions
+# ============================================================
+
+# The capacitor is recognized only inside CAP_MK.
+mim_top_plate    = fuse_top &amp; capacitor_mark
+mim_bottom_plate = metal2 &amp; capacitor_mark
+
+# Via2 over FuseTop is a MIM top-plate connection. It must not
+# simultaneously connect Metal2 to Metal3, otherwise both plates
+# would be shorted by the LVS connectivity model.
+mim_top_via2 = via2 &amp; fuse_top
+normal_via2  = via2 - fuse_top
+
+
+# ============================================================
+# 4. MOS and tap derived regions
+# ============================================================
+
+active_in_nwell      = active &amp; nwell
+active_outside_nwell = active - nwell
+
+# PMOS: P+ active inside N-well, crossed by non-resistor Poly.
+pmos_active = active_in_nwell &amp; pplus
+pmos_gate   = pmos_active &amp; poly_wire
+pmos_sd     = pmos_active - pmos_gate
+
+# NMOS: N+ active outside N-well, crossed by non-resistor Poly.
+nmos_active = active_outside_nwell &amp; nplus
+nmos_gate   = nmos_active &amp; poly_wire
+nmos_sd     = nmos_active - nmos_gate
+
+# Substrate and well taps used by guard rings.
+substrate_tap = active_outside_nwell &amp; pplus
+nwell_tap     = active_in_nwell &amp; nplus
+
+
+# ============================================================
+# 5. Contact classification
+# ============================================================
+
+nmos_sd_contact   = contact &amp; nmos_sd
+pmos_sd_contact   = contact &amp; pmos_sd
+poly_contact      = contact &amp; poly_wire
+substrate_contact = contact &amp; substrate_tap
+nwell_contact     = contact &amp; nwell_tap
+
+
+# ============================================================
+# 6. Device extraction
+# ============================================================
+
+extract_devices(
+  mos4("CNPDK_PMOS"),
+  {
+    "SD" =&gt; pmos_sd,
+    "G"  =&gt; pmos_gate,
+    "W"  =&gt; nwell,
+    "tS" =&gt; pmos_sd,
+    "tD" =&gt; pmos_sd,
+    "tG" =&gt; poly_wire,
+    "tW" =&gt; nwell
+  }
+)
+
+extract_devices(
+  mos4("CNPDK_NMOS"),
+  {
+    "SD" =&gt; nmos_sd,
+    "G"  =&gt; nmos_gate,
+    "W"  =&gt; bulk,
+    "tS" =&gt; nmos_sd,
+    "tD" =&gt; nmos_sd,
+    "tG" =&gt; poly_wire,
+    "tW" =&gt; bulk
+  }
+)
+
+# R = Rsheet * L / W
+extract_devices(
+  resistor("CNPDK_RPPOLY", 311.0),
+  {
+    "R" =&gt; resistor_body,
+    "C" =&gt; poly_wire
+  }
+)
+
+# C = area_capacitance * plate_overlap_area
+# 0.002 pF/um^2 = 2.0e-15 F/um^2
+extract_devices(
+  capacitor("CNPDK_MIMCAP", 2.0e-15),
+  {
+    "P1" =&gt; mim_top_plate,
+    "P2" =&gt; mim_bottom_plate,
+    "tA" =&gt; fuse_top,
+    "tB" =&gt; metal2
+  }
+)
+
+
+# ============================================================
+# 7. Electrical connectivity
+# ============================================================
+
+# NMOS source/drain to M1.
+connect(nmos_sd, nmos_sd_contact)
+connect(nmos_sd_contact, metal1)
+
+# PMOS source/drain to M1.
+connect(pmos_sd, pmos_sd_contact)
+connect(pmos_sd_contact, metal1)
+
+# Ordinary Poly, including resistor terminal leads, to M1.
+connect(poly_wire, poly_contact)
+connect(poly_contact, metal1)
+
+# N-well tap and N+ guard ring.
+connect(nwell, nwell_tap)
+connect(nwell_tap, nwell_contact)
+connect(nwell_contact, metal1)
+
+# P-substrate tap and P+ guard ring.
+connect(substrate_tap, substrate_contact)
+connect(substrate_contact, metal1)
+
+# The first CNPDK version assumes a common P-substrate at VSS.
+connect_global(bulk, "VSS")
+connect_global(substrate_tap, "VSS")
+
+# Metal stack.
+connect(metal1, via1)
+connect(via1, metal2)
+
+# Ordinary M2-to-M3 Via2 connection.
+connect(metal2, normal_via2)
+connect(normal_via2, metal3)
+
+# MIM top plate-to-M3 connection.
+connect(fuse_top, mim_top_via2)
+connect(mim_top_via2, metal3)
+
+# Attach net labels to their corresponding conductor layers.
+connect(metal1, metal1_label)
+connect(metal2, metal2_label)
+connect(metal3, metal3_label)
+
+
+# ============================================================
+# 8. Netlist output and LVS comparison
+# ============================================================
+
+target_netlist(
+  extracted_netlist,
+  write_spice(true, true),
+  "CNPDK extracted by KLayout"
+)
+
+schematic(reference_netlist)
+
+# Allow the current layout cell and the reference .SUBCKT to have different
+# names. This removes the need to rename TOP or edit the rule deck.
+if layout_cell_name != reference_top_name
+  same_circuits(layout_cell_name, reference_top_name)
+end
+
+# Flatten layout-only helper/PCell circuits before simplification.
+align
+
+# Remove redundant/floating items, combine eligible devices and
+# create top-level pins from labeled nets.
+netlist.simplify
+
+lvs_success = compare
+
+# After topology and parameters match, verify top-level pin labels.
+lvs_success &amp;&amp; flag_missing_ports
+</text>
+</klayout-macro>

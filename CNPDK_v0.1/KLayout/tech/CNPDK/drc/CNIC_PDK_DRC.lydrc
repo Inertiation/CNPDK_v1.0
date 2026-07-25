@@ -1,0 +1,474 @@
+<?xml version="1.0" encoding="utf-8"?>
+<klayout-macro>
+ <description/>
+ <version/>
+ <category>drc</category>
+ <prolog/>
+ <epilog/>
+ <doc/>
+ <autorun>false</autorun>
+ <autorun-early>false</autorun-early>
+ <priority>0</priority>
+ <shortcut/>
+ <show-in-menu>true</show-in-menu>
+ <group-name>drc_scripts</group-name>
+ <menu-path>tools_menu.drc.end</menu-path>
+ <interpreter>dsl</interpreter>
+ <dsl-interpreter-name>drc-dsl-xml</dsl-interpreter-name>
+ <text># ============================================================================
+# CNPDK COMPLETE DRC - Layer-Ordered Whole-Library Rule Deck
+#
+# Public error categories follow real drawn/marker layers:
+#   NWELL, ACTIVE, POLY, NPLUS, PPLUS, CONTACT,
+#   M1, VIA1, M2, VIA2, M3, SAB, RES_MK, FUSETOP, CAP_MK
+#
+# Device regions such as resistor_body and mim_top are internal derived regions.
+# They are not presented as independent GDS layers in error category names.
+# Units: um
+# ============================================================================
+
+report("CNPDK Complete DRC Report - Layer Ordered and Numbered")
+
+# ----------------------------------------------------------------------------
+# 1. INPUT LAYERS
+# ----------------------------------------------------------------------------
+
+nwell        = input(21, 0)
+active       = input(22, 0)
+poly         = input(30, 0)
+pplus        = input(31, 0)
+nplus        = input(32, 0)
+contact      = input(33, 0)
+metal1       = input(34, 0)
+via1         = input(35, 0)
+metal2       = input(36, 0)
+via2         = input(38, 0)
+metal3       = input(42, 0)
+sab          = input(49, 0)
+fusetop      = input(75, 0)
+res_mk       = input(110, 5)
+cap_mk       = input(117, 5)
+
+# Labels are reserved for later LVS/ERC and are not geometrical DRC layers.
+
+# ----------------------------------------------------------------------------
+# 2. INTERNAL DERIVED REGIONS
+# ----------------------------------------------------------------------------
+
+implant = nplus | pplus
+
+# MOS-derived regions
+all_gate  = active &amp; poly
+pmos_gate = all_gate &amp; pplus &amp; nwell
+nmos_gate = (all_gate &amp; nplus) - nwell
+
+p_active_in_nwell = active.interacting(pplus).interacting(nwell)
+n_tap_in_nwell    = active.interacting(nplus).interacting(nwell)
+n_active_in_psub  = active.interacting(nplus) - active.interacting(nwell)
+p_tap_in_psub     = active.interacting(pplus) - active.interacting(nwell)
+
+# Contact-derived regions
+active_contact    = contact.interacting(active)
+poly_contact      = contact.interacting(poly)
+valid_contact     = active_contact | poly_contact
+ambiguous_contact = active_contact &amp; poly_contact
+
+# RES_MK-derived resistor regions
+resistor_poly      = poly &amp; res_mk
+resistor_full_poly = poly.interacting(res_mk)
+resistor_body      = poly &amp; sab &amp; res_mk
+unrelated_poly     = poly - resistor_full_poly
+resistor_contact   = contact.interacting(resistor_full_poly)
+
+# CAP_MK-derived MIM regions
+mim_top            = fusetop &amp; cap_mk
+mim_bottom         = metal2.interacting(mim_top)
+unrelated_metal2   = metal2 - mim_bottom
+mim_top_via2       = via2.interacting(mim_top)
+normal_via2        = via2 - mim_top_via2
+
+# ============================================================================
+# 3. NWELL 21/0
+# ============================================================================
+
+nwell.width(0.86.um).output(
+  "1.1_NWELL.MIN_WIDTH",
+  "N-Well最小宽度不足0.86um / N-Well width must be &gt;= 0.86um"
+)
+
+nwell.space(0.60.um).output(
+  "1.2_NWELL.MIN_SPACE",
+  "同电位N-Well最小间距不足0.60um / Same-potential N-Well spacing must be &gt;= 0.60um"
+)
+
+nwell.enclosing(p_active_in_nwell, 0.43.um).output(
+  "1.3_NWELL.ENC.PMOS_ACTIVE",
+  "N-Well对PMOS P+ Active包围不足0.43um / N-Well enclosure of PMOS P+ Active must be &gt;= 0.43um"
+)
+
+nwell.enclosing(n_tap_in_nwell, 0.12.um).output(
+  "1.4_NWELL.ENC.NTAP",
+  "N-Well对N+ Well Tap包围不足0.12um / N-Well enclosure of N+ Well Tap must be &gt;= 0.12um"
+)
+
+# ============================================================================
+# 4. ACTIVE 22/0
+# ============================================================================
+
+active.width(0.22.um).output(
+  "2.1_ACTIVE.MIN_WIDTH",
+  "Active最小宽度不足0.22um / Active width must be &gt;= 0.22um"
+)
+
+active.space(0.28.um).output(
+  "2.2_ACTIVE.MIN_SPACE",
+  "Active最小间距不足0.28um / Active spacing must be &gt;= 0.28um"
+)
+
+active.not_inside(implant).output(
+  "2.3_ACTIVE.NO_IMPLANT",
+  "Active没有被N+或P+完整覆盖 / Active must be fully covered by N+ or P+ implant"
+)
+
+# ============================================================================
+# 5. POLY 30/0
+# ============================================================================
+
+poly.width(0.18.um).output(
+  "3.1_POLY.MIN_WIDTH",
+  "Poly最小宽度不足0.18um / Poly width must be &gt;= 0.18um"
+)
+
+poly.space(0.24.um).output(
+  "3.2_POLY.MIN_SPACE",
+  "Poly最小间距不足0.24um / Poly spacing must be &gt;= 0.24um"
+)
+
+nmos_gate.width(0.28.um).output(
+  "3.3_POLY.NMOS_GATE.MIN_LENGTH",
+  "NMOS栅长不足0.28um / NMOS gate length must be &gt;= 0.28um"
+)
+
+pmos_gate.width(0.28.um).output(
+  "3.4_POLY.PMOS_GATE.MIN_LENGTH",
+  "PMOS栅长不足0.28um / PMOS gate length must be &gt;= 0.28um"
+)
+
+active_contact.separation(all_gate, 0.15.um).output(
+  "3.5_POLY.SPACE.ACTIVE_CONTACT",
+  "Active Contact到MOS Gate间距不足0.15um / Active Contact to gate spacing must be &gt;= 0.15um"
+)
+
+poly_contact.separation(active, 0.17.um).output(
+  "3.6_POLY.CONTACT.SPACE.ACTIVE",
+  "Poly Contact到Active间距不足0.17um / Poly Contact to Active spacing must be &gt;= 0.17um"
+)
+
+contact.interacting(all_gate).output(
+  "3.7_POLY.CONTACT.ON_ACTIVE_GATE",
+  "Contact不能放置在有效MOS栅极上 / Contact is forbidden on an active MOS gate"
+)
+
+# MOS.GATE.UNDEFINED intentionally remains deleted. Device identity belongs to LVS.
+
+# ============================================================================
+# 6. NPLUS 32/0
+# ============================================================================
+
+nplus.width(0.40.um).output(
+  "4.1_NPLUS.MIN_WIDTH",
+  "N+最小宽度不足0.40um / N+ width must be &gt;= 0.40um"
+)
+
+nplus.space(0.40.um).output(
+  "4.2_NPLUS.MIN_SPACE",
+  "N+最小间距不足0.40um / N+ spacing must be &gt;= 0.40um"
+)
+
+nplus.enclosing(n_active_in_psub, 0.16.um).output(
+  "4.3_NPLUS.ENC.NMOS_ACTIVE",
+  "N+对NMOS Active包围不足0.16um / N+ enclosure of NMOS Active must be &gt;= 0.16um"
+)
+
+nplus.enclosing(n_tap_in_nwell, 0.16.um).output(
+  "4.4_NPLUS.ENC.NWELL_TAP",
+  "N+对N-Well Tap Active包围不足0.16um / N+ enclosure of N-Well Tap Active must be &gt;= 0.16um"
+)
+
+nplus.enclosing(nmos_gate, 0.23.um).output(
+  "4.5_NPLUS.ENC.NMOS_GATE",
+  "N+对NMOS Gate包围不足0.23um / N+ enclosure of NMOS Gate must be &gt;= 0.23um"
+)
+
+(nplus &amp; pplus).output(
+  "4.6_NPLUS.OVERLAP.PPLUS",
+  "N+与P+注入层发生重叠 / N+ and P+ implants must not overlap"
+)
+
+# ============================================================================
+# 7. PPLUS 31/0
+# ============================================================================
+
+pplus.width(0.40.um).output(
+  "5.1_PPLUS.MIN_WIDTH",
+  "P+最小宽度不足0.40um / P+ width must be &gt;= 0.40um"
+)
+
+pplus.space(0.40.um).output(
+  "5.2_PPLUS.MIN_SPACE",
+  "P+最小间距不足0.40um / P+ spacing must be &gt;= 0.40um"
+)
+
+pplus.enclosing(p_active_in_nwell, 0.16.um).output(
+  "5.3_PPLUS.ENC.PMOS_ACTIVE",
+  "P+对PMOS Active包围不足0.16um / P+ enclosure of PMOS Active must be &gt;= 0.16um"
+)
+
+pplus.enclosing(p_tap_in_psub, 0.16.um).output(
+  "5.4_PPLUS.ENC.PSUB_TAP",
+  "P+对P-Substrate Tap Active包围不足0.16um / P+ enclosure of P-Substrate Tap must be &gt;= 0.16um"
+)
+
+pplus.enclosing(pmos_gate, 0.23.um).output(
+  "5.5_PPLUS.ENC.PMOS_GATE",
+  "P+对PMOS Gate包围不足0.23um / P+ enclosure of PMOS Gate must be &gt;= 0.23um"
+)
+
+# ============================================================================
+# 8. CONTACT 33/0
+# ============================================================================
+
+contact.width(0.22.um).output(
+  "6.1_CONTACT.MIN_SIZE",
+  "Contact尺寸不足0.22um / Contact size must be &gt;= 0.22um"
+)
+
+contact.space(0.25.um).output(
+  "6.2_CONTACT.MIN_SPACE",
+  "Contact间距不足0.25um / Contact spacing must be &gt;= 0.25um"
+)
+
+(contact - valid_contact).output(
+  "6.3_CONTACT.NO_BOTTOM_LAYER",
+  "Contact下方没有Active或Poly / Contact must land on Active or Poly"
+)
+
+ambiguous_contact.output(
+  "6.4_CONTACT.ACTIVE.POLY.AMBIGUOUS",
+  "同一Contact同时接触Active和Poly / A Contact must not connect Active and Poly simultaneously"
+)
+
+active.enclosing(active_contact, 0.07.um).output(
+  "6.5_CONTACT.ENC_BY_ACTIVE",
+  "Active对Contact包围不足0.07um / Active enclosure of Contact must be &gt;= 0.07um"
+)
+
+poly.enclosing(poly_contact, 0.07.um).output(
+  "6.6_CONTACT.ENC_BY_POLY",
+  "Poly对Contact包围不足0.07um / Poly enclosure of Contact must be &gt;= 0.07um"
+)
+
+# ============================================================================
+# 9. METAL1 34/0
+# ============================================================================
+
+metal1.width(0.23.um).output(
+  "7.1_M1.MIN_WIDTH",
+  "Metal1宽度不足0.23um / Metal1 width must be &gt;= 0.23um"
+)
+
+metal1.space(0.23.um).output(
+  "7.2_M1.MIN_SPACE",
+  "Metal1间距不足0.23um / Metal1 spacing must be &gt;= 0.23um"
+)
+
+metal1.enclosing(contact, 0.06.um).output(
+  "7.3_M1.ENC.CONTACT",
+  "Metal1对Contact包围不足0.06um / Metal1 enclosure of Contact must be &gt;= 0.06um"
+)
+
+metal1.enclosing(via1, 0.06.um).output(
+  "7.4_M1.ENC.VIA1",
+  "Metal1对Via1包围不足0.06um / Metal1 enclosure of Via1 must be &gt;= 0.06um"
+)
+
+# ============================================================================
+# 10. VIA1 35/0
+# ============================================================================
+
+via1.width(0.26.um).output(
+  "8.1_VIA1.MIN_SIZE",
+  "Via1尺寸不足0.26um / Via1 size must be &gt;= 0.26um"
+)
+
+via1.space(0.26.um).output(
+  "8.2_VIA1.MIN_SPACE",
+  "Via1间距不足0.26um / Via1 spacing must be &gt;= 0.26um"
+)
+
+# ============================================================================
+# 11. METAL2 36/0
+# ============================================================================
+
+metal2.width(0.28.um).output(
+  "9.1_M2.MIN_WIDTH",
+  "Metal2宽度不足0.28um / Metal2 width must be &gt;= 0.28um"
+)
+
+metal2.space(0.28.um).output(
+  "9.2_M2.MIN_SPACE",
+  "Metal2间距不足0.28um / Metal2 spacing must be &gt;= 0.28um"
+)
+
+metal2.enclosing(via1, 0.06.um).output(
+  "9.3_M2.ENC.VIA1",
+  "Metal2对Via1包围不足0.06um / Metal2 enclosure of Via1 must be &gt;= 0.06um"
+)
+
+metal2.enclosing(normal_via2, 0.06.um).output(
+  "9.4_M2.ENC.NORMAL_VIA2",
+  "Metal2对普通Via2包围不足0.06um / Metal2 enclosure of normal Via2 must be &gt;= 0.06um"
+)
+
+# ============================================================================
+# 12. VIA2 38/0
+# ============================================================================
+
+via2.width(0.26.um).output(
+  "10.1_VIA2.MIN_SIZE",
+  "Via2尺寸不足0.26um / Via2 size must be &gt;= 0.26um"
+)
+
+via2.space(0.26.um).output(
+  "10.2_VIA2.MIN_SPACE",
+  "Via2间距不足0.26um / Via2 spacing must be &gt;= 0.26um"
+)
+
+# ============================================================================
+# 13. METAL3 42/0
+# ============================================================================
+
+metal3.width(0.28.um).output(
+  "11.1_M3.MIN_WIDTH",
+  "Metal3宽度不足0.28um / Metal3 width must be &gt;= 0.28um"
+)
+
+metal3.space(0.28.um).output(
+  "11.2_M3.MIN_SPACE",
+  "Metal3间距不足0.28um / Metal3 spacing must be &gt;= 0.28um"
+)
+
+metal3.enclosing(normal_via2, 0.06.um).output(
+  "11.3_M3.ENC.NORMAL_VIA2",
+  "Metal3对普通Via2包围不足0.06um / Metal3 enclosure of normal Via2 must be &gt;= 0.06um"
+)
+
+# ============================================================================
+# 14. SAB 49/0
+# ============================================================================
+
+# No global rule states that every SAB must be a resistor SAB.
+# SAB can be used by other unsilicided devices. Resistor-specific SAB
+# relationships are therefore triggered and reported under RES_MK below.
+
+# ============================================================================
+# 15. RES_MK 110/5 - MARKER-TRIGGERED RESISTOR RULES
+# ============================================================================
+
+resistor_poly.width(0.80.um).output(
+  "13.1_RES_MK.POLY.MIN_WIDTH",
+  "RES_MK定义的Poly电阻宽度不足0.80um / RES_MK-defined Poly resistor width must be &gt;= 0.80um"
+)
+
+resistor_poly.space(0.40.um).output(
+  "13.2_RES_MK.POLY.MIN_SPACE",
+  "RES_MK定义的Poly电阻间距不足0.40um / RES_MK-defined Poly resistor spacing must be &gt;= 0.40um"
+)
+
+resistor_poly.separation(active, 0.60.um).output(
+  "13.3_RES_MK.SPACE.ACTIVE",
+  "RES_MK电阻区域到Active间距不足0.60um / RES_MK resistor region to Active spacing must be &gt;= 0.60um"
+)
+
+resistor_poly.separation(unrelated_poly, 0.60.um).output(
+  "13.4_RES_MK.SPACE.UNRELATED_POLY",
+  "RES_MK电阻区域到无关Poly间距不足0.60um / RES_MK resistor region to unrelated Poly spacing must be &gt;= 0.60um"
+)
+
+pplus.enclosing(resistor_poly, 0.30.um).output(
+  "13.5_RES_MK.ENC_BY_PPLUS",
+  "P+对RES_MK定义的电阻区域包围不足0.30um / P+ enclosure of RES_MK resistor region must be &gt;= 0.30um"
+)
+
+res_mk.not_inside(poly).output(
+  "13.6_RES_MK.OUTSIDE_POLY",
+  "RES_MK存在未被Poly覆盖的区域 / RES_MK must be covered by Poly"
+)
+
+res_mk.not_inside(sab).output(
+  "13.7_RES_MK.OUTSIDE_SAB",
+  "RES_MK存在未被SAB覆盖的区域 / RES_MK must lie inside SAB"
+)
+
+sab.separation(resistor_contact, 0.22.um).output(
+  "13.8_RES_MK.SAB.SPACE.CONTACT",
+  "RES_MK电阻的SAB到端头Contact间距不足0.22um / RES_MK resistor SAB-to-Contact spacing must be &gt;= 0.22um"
+)
+
+# The old horizontal-only SAB width-direction rule remains omitted because a
+# 90-degree rotated resistor would otherwise be falsely reported.
+
+# ============================================================================
+# 16. FUSETOP 75/0
+# ============================================================================
+
+# FuseTop is currently used by CAP_MK-defined MIM capacitors. Device-specific
+# checks are triggered and reported under CAP_MK below.
+
+# ============================================================================
+# 17. CAP_MK 117/5 - MARKER-TRIGGERED MIM RULES
+# ============================================================================
+
+# CNPDK convention: CAP_MK exactly coincides with FuseTop.
+(cap_mk ^ fusetop).output(
+  "15.1_CAP_MK.NOT_COINCIDENT_WITH_FUSETOP",
+  "CAP_MK必须与FuseTop完全重合 / CAP_MK must exactly coincide with FuseTop"
+)
+
+mim_top.width(5.00.um).output(
+  "15.2_CAP_MK.FUSETOP.MIN_SIZE",
+  "CAP_MK定义的FuseTop尺寸不足5um / CAP_MK-defined FuseTop must be at least 5um x 5um"
+)
+
+mim_top.space(0.60.um).output(
+  "15.3_CAP_MK.FUSETOP.MIN_SPACE",
+  "CAP_MK定义的FuseTop间距不足0.60um / CAP_MK-defined FuseTop spacing must be &gt;= 0.60um"
+)
+
+metal2.enclosing(mim_top, 0.60.um).output(
+  "15.4_CAP_MK.ENC_BY_M2",
+  "Metal2对CAP_MK定义的MIM上极板包围不足0.60um / M2 enclosure of CAP_MK MIM top plate must be &gt;= 0.60um"
+)
+
+mim_bottom.separation(unrelated_metal2, 1.20.um).output(
+  "15.5_CAP_MK.M2.SPACE.UNRELATED_M2",
+  "CAP_MK定义的MIM下极板到无关Metal2间距不足1.20um / MIM bottom plate to unrelated M2 spacing must be &gt;= 1.20um"
+)
+
+mim_top_via2.space(0.50.um).output(
+  "15.6_CAP_MK.VIA2.MIN_SPACE",
+  "CAP_MK定义的MIM上极板Via2间距不足0.50um / MIM top Via2 spacing must be &gt;= 0.50um"
+)
+
+mim_top.enclosing(mim_top_via2, 0.40.um).output(
+  "15.7_CAP_MK.FUSETOP.ENC.VIA2",
+  "FuseTop对CAP_MK电容上极板Via2包围不足0.40um / FuseTop enclosure of MIM top Via2 must be &gt;= 0.40um"
+)
+
+metal3.enclosing(mim_top_via2, 0.12.um).output(
+  "15.8_CAP_MK.M3.ENC.VIA2",
+  "Metal3对CAP_MK电容上极板Via2包围不足0.12um / M3 enclosure of MIM top Via2 must be &gt;= 0.12um"
+)
+
+# End of CNPDK Complete DRC</text>
+</klayout-macro>
